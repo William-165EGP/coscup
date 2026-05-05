@@ -79,6 +79,9 @@ This example shows the complete RCU read side usage:
 3. Use rcu_read_unlock() to mark the end of the RCU read-side critical section.
 
 Note that `rcu_read_lock()` and `rcu_read_unlock()` are much lighter than taking an RWLock. Depending on the RCU configuration, they may only disable and re-enable preemption, or update a small per-task nesting counter.
+<details>
+
+<summary> reader side usage example function  </summary>
 
 ```c
 int fib_dump_info_fnhe(struct sk_buff *skb, struct netlink_callback *cb,
@@ -111,4 +114,7 @@ int fib_dump_info_fnhe(struct sk_buff *skb, struct netlink_callback *cb,
 	return 0;
 }
 ```
+
+</details>
+
 ### Writer Side
