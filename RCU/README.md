@@ -19,7 +19,7 @@ Therefore, the old object cannot be freed immediately.
 The writer must wait for a grace period, ensuring that all pre-existing readers have finished, before reclaiming the old object.
 This prevents use-after-free bugs.
 <details>
-<summary>RCU writer / reader flow </summary>
+<summary> RCU writer / reader flow </summary>
 
 ```text
 +---------------------------------+        +--------------------------------+
@@ -74,9 +74,9 @@ On the read side, I chose `fib_dump_info_fnhe` as an example.
 This function iterates over the nexthops of a `fib_info` object and dumps their nexthop exception entries, using RCU to safely access the exception buckets without taking the `fnhe_lock`.
 
 This example shows the complete RCU read side usage:
-1. Use rcu_read_lock() to mark the beginning of the RCU read-side critical section.
-2. Use rcu_dereference(p) to read the RCU-protected pointer safely.
-3. Use rcu_read_unlock() to mark the end of the RCU read-side critical section.
+1. Use `rcu_read_lock()` to mark the beginning of the RCU read-side critical section.
+2. Use `rcu_dereference(p)` to read the RCU-protected pointer safely.
+3. Use `rcu_read_unlock()` to mark the end of the RCU read-side critical section.
 
 Note that `rcu_read_lock()` and `rcu_read_unlock()` are much lighter than taking an RWLock. Depending on the RCU configuration, they may only disable and re-enable preemption, or update a small per-task nesting counter.
 <details>
@@ -118,3 +118,127 @@ int fib_dump_info_fnhe(struct sk_buff *skb, struct netlink_callback *cb,
 </details>
 
 ### Writer Side
+On the writer side, I chose `ip_del_fnhe` as an example.
+This function removes the nexthop exception entry for a given destination address from the exception linked list.
+It requires the spinlock (`fnhe_lock`) because it updates the list pointers and must prevent multiple CPUs from modifying the same list concurrently and corrupting or breaking the chain.
+
+The graph below roughly shows the data structure:
+
+<details>
+
+<summary> nhc data structure </summary>
+
+```text
+nhc->nhc_exceptions
+        |
+        v
++-----------------------------+
+| fnhe_hash_bucket array      |
+| bucket[0]                   |
+| bucket[1]                   |
+| bucket[2]                   |
+| ...                         |
+|	bucket[hval]                |
+| ...                         |
++-----------------------------+
+        |
+        v
+bucket[hval].chain
+        |
+        v
++-------------------+      +-------------------+      +-------------------+
+| fib_nh_exception  | ---> | fib_nh_exception  | ---> | fib_nh_exception  |
+| fnhe_daddr        |      | fnhe_daddr        |      | fnhe_daddr        |
+| fnhe_next         |      | fnhe_next         |      | fnhe_next         |
++-------------------+      +-------------------+      +-------------------+
+```
+
+</details>
+
+This example shows the complete RCU write-side usage:
+1. Grab the spinlock (`fnhe_lock`) to prevent another CPU from updating the exception list at the same time.
+2. Use `rcu_assign_pointer(dest_pointer, new_pointer)` to publish the updated pointer to RCU readers.
+3. Use `kfree_rcu(old_pointer, rcu_head_field)` to queue the removed node for later reclamation through an RCU callback. The node is freed only after a grace period, ensuring that no pre-existing RCU reader can still access it.
+4. Release the spinlock (`fnhe_lock`).
+Note that we can use `rcu_dereference_protected(...)` because we have acquired `fnhe_lock`.
+<details>
+
+<summary> writer side usage example </summary>
+
+```c
+
+static void ip_del_fnhe(struct fib_nh_common *nhc, __be32 daddr)
+{
+	struct fnhe_hash_bucket *hash;
+	struct fib_nh_exception *fnhe, __rcu **fnhe_p;
+	u32 hval = fnhe_hashfun(daddr);
+
+	spin_lock_bh(&fnhe_lock);
+
+	hash = rcu_dereference_protected(nhc->nhc_exceptions,
+					 lockdep_is_held(&fnhe_lock));
+	hash += hval;
+
+	fnhe_p = &hash->chain;
+	fnhe = rcu_dereference_protected(*fnhe_p, lockdep_is_held(&fnhe_lock));
+	while (fnhe) {
+		if (fnhe->fnhe_daddr == daddr) {
+			rcu_assign_pointer(*fnhe_p, rcu_dereference_protected(
+				fnhe->fnhe_next, lockdep_is_held(&fnhe_lock)));
+			/* set fnhe_daddr to 0 to ensure it won't bind with
+			 * new dsts in rt_bind_exception().
+			 */
+			fnhe->fnhe_daddr = 0;
+			fnhe_flush_routes(fnhe);
+			kfree_rcu(fnhe, rcu);
+			break;
+		}
+		fnhe_p = &fnhe->fnhe_next;
+		fnhe = rcu_dereference_protected(fnhe->fnhe_next,
+						 lockdep_is_held(&fnhe_lock));
+	}
+
+	spin_unlock_bh(&fnhe_lock);
+}
+
+```
+
+</details>
+
+If a writer needs to update the shared data through multiple steps, the write side must acquire a lock, such as a spinlock or a mutex.
+In this example, the function updates a linked list; hence, it acquires a spinlock to avoid another writer corrupting the linked list.
+
+The diagrams below show the updating process:
+<details>
+
+<summary> Remove non-head node (B) </summary>
+
+```text
+bucket->chain ---> A ---> B ---> C
+              |
+							v
+bucket->chain ---> A ---> C
+													^          
+													|
+							 		 B -----+			
+```
+
+</details>
+<details>
+
+<summary> Remove head node (A) </summary>
+
+```text
+bucket->chain ---> A ---> B ---> C
+              |
+							v
+bucket->chain ---> B ---> C
+									 ^          
+					  			 |
+					  A -----+			
+```
+
+</details>
+
+If an RCU reader already holds a pointer to the unlinked node, it can still safely access that node and follow its `fnhe_next` pointer.
+The node is freed only after a grace period, ensuring that all pre-existing RCU readers have finished before the memory is reclaimed.
