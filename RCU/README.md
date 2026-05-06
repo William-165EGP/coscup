@@ -237,8 +237,6 @@ bucket->chain ---> A ------------> C
 Before:
 
 bucket->chain ---> A ---> B ---> C
-                   |
-                   v
 
 After:
 
