@@ -132,25 +132,27 @@ The graph below roughly shows the data structure:
 nhc->nhc_exceptions
         |
         v
-+-----------------------------+
-| fnhe_hash_bucket array      |
-| bucket[0]                   |
-| bucket[1]                   |
-| bucket[2]                   |
-| ...                         |
-|	bucket[hval]                |
-| ...                         |
-+-----------------------------+
++--------------------------------+
+| fnhe_hash_bucket array         |
++--------------------------------+
+| bucket[0]                      |
+| bucket[1]                      |
+| bucket[2]                      |
+| ...                            |
+| bucket[hval]                   |
+| ...                            |
++--------------------------------+
         |
         v
 bucket[hval].chain
         |
         v
-+-------------------+      +-------------------+      +-------------------+
-| fib_nh_exception  | ---> | fib_nh_exception  | ---> | fib_nh_exception  |
-| fnhe_daddr        |      | fnhe_daddr        |      | fnhe_daddr        |
-| fnhe_next         |      | fnhe_next         |      | fnhe_next         |
-+-------------------+      +-------------------+      +-------------------+
++----------------------+     +----------------------+     +----------------------+
+| fib_nh_exception     | --> | fib_nh_exception     | --> | fib_nh_exception     |
++----------------------+     +----------------------+     +----------------------+
+| fnhe_daddr           |     | fnhe_daddr           |     | fnhe_daddr           |
+| fnhe_next            |     | fnhe_next            |     | fnhe_next            |
++----------------------+     +----------------------+     +----------------------+
 ```
 
 </details>
@@ -214,13 +216,16 @@ The diagrams below show the updating process:
 <summary> Remove non-head node (B) </summary>
 
 ```text
+Before:
+
 bucket->chain ---> A ---> B ---> C
-              |
-							v
-bucket->chain ---> A ---> C
-													^          
-													|
-							 		 B -----+			
+
+After:
+
+bucket->chain ---> A ------------> C
+                                 ^
+                                 |
+                  B -------------+	
 ```
 
 </details>
@@ -229,13 +234,18 @@ bucket->chain ---> A ---> C
 <summary> Remove head node (A) </summary>
 
 ```text
+Before:
+
 bucket->chain ---> A ---> B ---> C
-              |
-							v
-bucket->chain ---> B ---> C
-									 ^          
-					  			 |
-					  A -----+			
+                   |
+                   v
+
+After:
+
+bucket->chain --------> B ---> C
+                        ^
+                        |
+              A --------+		
 ```
 
 </details>
