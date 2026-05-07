@@ -21,3 +21,6 @@ and how to analyze synchronization behavior on modern multicore architectures.
 Building on our previous talk, this session places greater emphasis on the design and evaluation of CNA and RON, incorporating insights from kernel maintainers.
 We focus on real-world trade-offs and practical decision-making in synchronization,
 providing attendees with actionable perspectives on addressing performance bottlenecks caused by lock contention and considering alternative synchronization strategies.
+
+## Full Version
+Anyone interested in this talk is also welcome to check out this page for all the details: https://hackmd.io/@KOn-AivgTuiCgHekCDog_Q/B1YaWf50Ze
