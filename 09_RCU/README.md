@@ -250,3 +250,5 @@ bucket->chain --------> B ---> C
 
 If an RCU reader already holds a pointer to the unlinked node, it can still safely access that node and follow its `fnhe_next` pointer.
 The node is freed only after a grace period, ensuring that all pre-existing RCU readers have finished before the memory is reclaimed.
+
+## Implementation Details
