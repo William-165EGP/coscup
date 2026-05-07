@@ -1,14 +1,22 @@
 name: Merge Markdown
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "*/README.md"
+      - "merge_md.py"
+      - ".github/workflows/merge-md.yml"
 permissions:
   contents: write
 jobs:
   merge-md:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -27,5 +35,5 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "Update merged markdown"
-            git push
+            git push origin HEAD:${{ github.ref_name }}
           fi
