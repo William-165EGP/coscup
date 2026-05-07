@@ -1,5 +1,5 @@
-# RCU
-## Introduction
+## RCU
+### Introduction
 RCU (Read-Copy-Update) is a synchronization mechanism designed for read-mostly workloads.
 Its main goal is to make read-side critical sections extremely cheap by avoiding lock acquisition on the read path.
 
@@ -59,7 +59,7 @@ This prevents use-after-free bugs.
 
 RCU is suitable for workloads where readers can tolerate observing an older version of the data.
 The older version must remain valid for the duration of the read-side critical section; readers must never see a partially updated or freed object.
-## Example Usage
+### Example Usage
 The `route.c` file in the Linux kernel is suitable for this kind of workload.
 Route lookups, which are on the read side, happen far more frequently than route updates, which are on the write side.
 
@@ -69,7 +69,7 @@ If the old data turns out to be invalid, the lookup can simply retry.
 The routing data stored in the Linux kernel is not guaranteed to be the latest view of the network, even if it is protected by an RWLock, because routes outside the machine may change at any time.
 In this case, RCU is much more efficient than an RWLock. Since readers do not need to take a heavy lock, RCU may even allow readers to observe newer data sooner than they would with an RWLock under contention.
 
-### Reader Side
+#### Reader Side
 On the read side, I chose `fib_dump_info_fnhe` as an example.
 This function iterates over the nexthops of a `fib_info` object and dumps their nexthop exception entries, using RCU to safely access the exception buckets without taking the `fnhe_lock`.
 
@@ -117,7 +117,7 @@ int fib_dump_info_fnhe(struct sk_buff *skb, struct netlink_callback *cb,
 
 </details>
 
-### Writer Side
+#### Writer Side
 On the writer side, I chose `ip_del_fnhe` as an example.
 This function removes the nexthop exception entry for a given destination address from the exception linked list.
 It requires the spinlock (`fnhe_lock`) because it updates the list pointers and must prevent multiple CPUs from modifying the same list concurrently and corrupting or breaking the chain.
@@ -251,4 +251,4 @@ bucket->chain --------> B ---> C
 If an RCU reader already holds a pointer to the unlinked node, it can still safely access that node and follow its `fnhe_next` pointer.
 The node is freed only after a grace period, ensuring that all pre-existing RCU readers have finished before the memory is reclaimed.
 
-## Implementation Details
+### Implementation Details
