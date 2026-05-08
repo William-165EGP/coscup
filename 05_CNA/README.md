@@ -224,7 +224,7 @@ We defined the address as `a` and initialized queue as following graph:
 
 <details>
 
-<summary>fourth step</summary>
+<summary>fifth step</summary>
 
 ```text
 
