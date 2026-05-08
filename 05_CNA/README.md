@@ -72,7 +72,7 @@ We defined the address as `a` and initialized queue as following graph:
                                                                                                v
        t1                    t2                  t3                    t4                  t5                    t6
 +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
-| 1 | 0 |   | ------>| 0 | 1 |   | ------>| 0 | 1 |   | ------>| 0 | 0 |   | ------>| 0 | 0 |   | ------>| 0 | 1 |   |   |
+| 1 | 0 |   | ------>| 0 | 1 |   | ------>| 0 | 1 |   | ------>| 0 | 0 |   | ------>| 0 | 0 |   | ------>| 0 | 1 |   |  |
 +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
 
 ```
@@ -104,7 +104,7 @@ We defined the address as `a` and initialized queue as following graph:
                                                                v
                                                               t2                    t3
                                                        +---+---+---+--+     +---+---+---+--+
-                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   |  |
                                                        +---+---+-|-+--+     +---+---+---+--+
                                                                  |
                                                                  |
@@ -138,7 +138,7 @@ We defined the address as `a` and initialized queue as following graph:
                                                                v
                                                               t2                    t3
                                                        +---+---+---+--+     +---+---+---+--+
-                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   |  |
                                                        +---+---+-|-+--+     +---+---+---+--+
                                                                  |
                                                                  |
@@ -173,7 +173,7 @@ We defined the address as `a` and initialized queue as following graph:
                                                                v
                                                               t2                    t3
                                                        +---+---+---+--+     +---+---+---+--+
-                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   |  |
                                                        +---+---+-|-+--+     +---+---+---+--+
                                                                  |
                                                                  |
@@ -207,7 +207,7 @@ We defined the address as `a` and initialized queue as following graph:
                                                                v
                                                               t2                    t3
                                                        +---+---+---+--+     +---+---+---+--+
-                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   |  |
                                                        +---+---+-|-+--+     +---+---+---+--+
                                                                  |
                                                                  |
@@ -220,7 +220,8 @@ We defined the address as `a` and initialized queue as following graph:
 
 5. Now `t5` leaves the critical section and wants to handoff the ownership
    * `find_successor` finds out the next node on main queue with the same NUMA/socket id is `t1`, also finds out that node (`t6`) between `t5` to `t1` (excluding `t5` and `t1`) have different NUMA/socket id; hence needs to move it to secondary queue
-   * Saves the pointer of head of secondary queue head `t2` to the `spin` of next handoff `t1`   
+   * Saves the pointer of head of secondary queue head `t2` to the `spin` of next handoff `t1`
+   * We don't need to traverse the secondary queue every time moving some nodes to secondary queue, because secondary tail can help us to point to that
 
 <details>
 
@@ -228,26 +229,54 @@ We defined the address as `a` and initialized queue as following graph:
 
 ```text
 
-                                                                           tail
-                                                                             |
-                                                                             |
-                                                                             v
-      t5                    t6                   t1                      t7
-+---+---+---+--+     +---+---+---+---+     +---+---+---+---+     +---+---+---+--+
-| | | 0 |   | ------>| 0 | 1 |   | ------->| 0 | 0 |   | ------->| 0 | 1 |   |  |
-+-|-+---+---+--+     +---+---+---+---+     +---+---+---+---+     +---+---+---+--+
+                              tail
+                                |
+                                |
+                                v
+     t1                      t7
++---+---+---+---+     +---+---+---+--+
+| | | 0 |   | ------->| 0 | 1 |   |  |
++-|-+---+---+---+     +---+---+---+--+
   |
   |
   +------------------------------------------------------------+
                                                                |
                                                                v
-                                                              t2                    t3
-                                                       +---+---+---+--+     +---+---+---+--+
-                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
-                                                       +---+---+-|-+--+     +---+---+---+--+
+                                                              t2                    t3                   t6
+                                                       +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   | ------>| 0 | 1 |   |  |
+                                                       +---+---+-|-+--+     +---+---+---+--+     +---+---+---+--+
                                                                  |
                                                                  |
-                                                                 +---------> secondaryTail = t3
+                                                                 +-------------------------------> secondaryTail = t6
+
+```
+
+</details>
+
+6. Now `t1` leaves the critical section and wants to handoff the ownership
+   * `find_successor` cannot find out the next node on main queue with the same NUMA/socket id.
+   * Moves all of the node (`t7`) next to `t1` to secondary queue tail.
+   * Pass the lock to secondary queue head (store `1` to the `spin` of secondary queue head node)
+   * The secondary becomes the new main queue 
+
+<details>
+
+<summary>sixth step</summary>
+
+```text
+
+                                                                        tail
+                                                                         |
+                                                                         |
+                                                                         v
+        t2                   t3                   t6                   t7
++---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
+| 0 | 1 | | | ------>| 0 | 1 |   | ------>| 0 | 1 |   | ------>| 0 | 1 |   |  |
++---+---+-|-+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
+          |
+          |
+          +-------------------------------> secondaryTail = t6 (useless in main queue)
 
 ```
 
