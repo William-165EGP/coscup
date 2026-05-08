@@ -1,6 +1,7 @@
 ## Compact NUMA-aware Locks (CNA)
 ### Introduction
-Compact NUMA-aware Locks, also known as CNA, are NUMA-aware Locks. Their advantages can be summarized as follows:
+Compact NUMA-aware Locks, also known as CNA, are NUMA-aware Locks.  
+The advantages can be summarized as follows:
 1. It tend to pass the lock to a thread running on the same NUMA node/socket, which avoids remote cache access latency and reduces cache misses.
 2. It keeps each lock instance compact; the global lock state still fits in the 32-bit `qspinlock` word, while additonal CNA metadata is kept in per-CPU nodes.
 3. Lock instances do not require dynamic allocation. This is important because `kmalloc()` cannot be called in the `qspinlock`.
@@ -12,9 +13,9 @@ The next plot shows the data structure in Linux kernel, which is a little bit di
 <summary>Kernel CNA queue node</summary>
 
 ```text
-+------+------------------+------+------------------+--------------+
-| next | locked           | tail | socket_and_count | encoded_tail |
-+------+------------------+------+------------------+--------------+
++------+--------+------+------------------+--------------+
+| next | locked | tail | socket_and_count | encoded_tail |
++------+--------+------+------------------+--------------+
 ```
 
 </details>
@@ -65,6 +66,10 @@ We defined the address as `a` and initialized queue as following graph:
 
 ```text
 
+                                                                                              tail
+                                                                                               |
+                                                                                               |
+                                                                                               v
        t1                    t2                  t3                    t4                  t5                    t6
 +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
 | 1 | 0 |   | ------>| 0 | 1 |   | ------>| 0 | 1 |   | ------>| 0 | 0 |   | ------>| 0 | 0 |   | ------>| 0 | 1 |   |   |
@@ -74,9 +79,9 @@ We defined the address as `a` and initialized queue as following graph:
 
 </details>
 
-1. Now `t1` wants to handoff the ownership
-   * `find_successor` finds out the nodes between `t1` to `t4` (excluding `t1` and `t4`) have different NUMA/socket id; hence needs to move it to secondary queue
-   * Saves the pointer of head of secondary queue head `t2` to the next handoff `t4`   
+1. Now `t1` leaves the critical section and wants to handoff the ownership
+   * `find_successor` finds out the next node on main queue with the same NUMA/socket id is `t4`, also finds out that nodes (`t2`, `t3`) between `t1` to `t4` (excluding `t1` and `t4`) have different NUMA/socket id; hence needs to move it to secondary queue
+   * Saves the pointer of head of secondary queue head `t2` to the `spin` of next handoff `t4`   
 
 <details>
 
@@ -84,10 +89,153 @@ We defined the address as `a` and initialized queue as following graph:
 
 ```text
 
-t4                    t5                    t6
+                                                  tail
+                                                    |
+                                                    |
+                                                    v
+      t4                    t5                   t6
 +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
 | | | 0 |   | ------>| 0 | 0 |   | ------>| 0 | 1 |   |  |
 +-|-+---+---+--+     +---+---+---+--+     +---+---+---+--+
+  |
+  |
+  +------------------------------------------------------------+
+                                                               |
+                                                               v
+                                                              t2                    t3
+                                                       +---+---+---+--+     +---+---+---+--+
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
+                                                       +---+---+-|-+--+     +---+---+---+--+
+                                                                 |
+                                                                 |
+                                                                 +---------> secondaryTail = t3
+
+```
+
+</details>
+
+2. `t1` has left the ciritical section, and wants to acquire the lock again
+   * Note that the new coming node will always join the main queue. (The global lock structure `tail` points to the tail node of main queue) 
+
+<details>
+
+<summary>second step</summary>
+
+```text
+
+                                                                          tail
+                                                                           |
+                                                                           |
+                                                                           v
+      t4                    t5                   t6                     t1
++---+---+---+--+     +---+---+---+--+     +---+---+---+---+     +---+---+---+--+
+| | | 0 |   | ------>| 0 | 0 |   | ------>| 0 | 1 |   | ------->| 0 | 0 |   |  |
++-|-+---+---+--+     +---+---+---+--+     +---+---+---+---+     +---+---+---+--+
+  |
+  |
+  +------------------------------------------------------------+
+                                                               |
+                                                               v
+                                                              t2                    t3
+                                                       +---+---+---+--+     +---+---+---+--+
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
+                                                       +---+---+-|-+--+     +---+---+---+--+
+                                                                 |
+                                                                 |
+                                                                 +---------> secondaryTail = t3
+
+```
+
+</details>
+
+3. Now `t4` leaves the critical section and wants to handoff the ownership
+   * `find_successor` finds out the next node on main queue with the same NUMA/socket id is `t5`, also finds out that no node needs to move to 
+   * Saves the pointer of head of secondary queue head `t2` to the `spin` of next handoff `t5`   
+
+<details>
+
+<summary>third step</summary>
+
+```text
+
+                                                  tail
+                                                    |
+                                                    |
+                                                    v
+      t5                    t6                   t1
++---+---+---+--+     +---+---+---+---+     +---+---+---+--+
+| | | 0 |   | ------>| 0 | 1 |   | ------->| 0 | 0 |   |  |
++-|-+---+---+--+     +---+---+---+---+     +---+---+---+--+
+  |
+  |
+  +------------------------------------------------------------+
+                                                               |
+                                                               v
+                                                              t2                    t3
+                                                       +---+---+---+--+     +---+---+---+--+
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
+                                                       +---+---+-|-+--+     +---+---+---+--+
+                                                                 |
+                                                                 |
+                                                                 +---------> secondaryTail = t3
+
+```
+
+</details>
+
+
+4. A new node `t7` wants to acquire the lock
+ 
+<details>
+
+<summary>fourth step</summary>
+
+```text
+
+                                                                           tail
+                                                                             |
+                                                                             |
+                                                                             v
+      t5                    t6                   t1                      t7
++---+---+---+--+     +---+---+---+---+     +---+---+---+---+     +---+---+---+--+
+| | | 0 |   | ------>| 0 | 1 |   | ------->| 0 | 0 |   | ------->| 0 | 1 |   |  |
++-|-+---+---+--+     +---+---+---+---+     +---+---+---+---+     +---+---+---+--+
+  |
+  |
+  +------------------------------------------------------------+
+                                                               |
+                                                               v
+                                                              t2                    t3
+                                                       +---+---+---+--+     +---+---+---+--+
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
+                                                       +---+---+-|-+--+     +---+---+---+--+
+                                                                 |
+                                                                 |
+                                                                 +---------> secondaryTail = t3
+
+```
+
+</details>
+
+
+5. Now `t5` leaves the critical section and wants to handoff the ownership
+   * `find_successor` finds out the next node on main queue with the same NUMA/socket id is `t1`, also finds out that node (`t6`) between `t5` to `t1` (excluding `t5` and `t1`) have different NUMA/socket id; hence needs to move it to secondary queue
+   * Saves the pointer of head of secondary queue head `t2` to the `spin` of next handoff `t1`   
+
+<details>
+
+<summary>fourth step</summary>
+
+```text
+
+                                                                           tail
+                                                                             |
+                                                                             |
+                                                                             v
+      t5                    t6                   t1                      t7
++---+---+---+--+     +---+---+---+---+     +---+---+---+---+     +---+---+---+--+
+| | | 0 |   | ------>| 0 | 1 |   | ------->| 0 | 0 |   | ------->| 0 | 1 |   |  |
++-|-+---+---+--+     +---+---+---+---+     +---+---+---+---+     +---+---+---+--+
   |
   |
   +------------------------------------------------------------+
