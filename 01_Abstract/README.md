@@ -23,4 +23,4 @@ We focus on real-world trade-offs and practical decision-making in synchronizati
 providing attendees with actionable perspectives on addressing performance bottlenecks caused by lock contention and considering alternative synchronization strategies.
 
 ### Full Version
-Anyone interested in this talk is also welcome to check out this page for all the details: https://hackmd.io/@KOn-AivgTuiCgHekCDog_Q/B1YaWf50Ze
+Anyone interested in this talk is also welcome to check out this page for all the details: https://hackmd.io/@KOn-AivgTuiCgHekCDog_Q/coscup-2026
