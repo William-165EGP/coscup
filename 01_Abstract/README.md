@@ -1,5 +1,5 @@
 # From Test-and-Set to NUMA-aware Locks: Rethinking Spinlocks on Modern Hardware
-## Abstract
+### Abstract
 Modern multicore systems rely heavily on efficient synchronization, yet many developers treat spinlocks as a black box.
 
 In this talk, we explore how spinlock designs evolve to address scalability challenges on modern hardware.
@@ -22,5 +22,5 @@ Building on our previous talk, this session places greater emphasis on the desig
 We focus on real-world trade-offs and practical decision-making in synchronization,
 providing attendees with actionable perspectives on addressing performance bottlenecks caused by lock contention and considering alternative synchronization strategies.
 
-## Full Version
+### Full Version
 Anyone interested in this talk is also welcome to check out this page for all the details: https://hackmd.io/@KOn-AivgTuiCgHekCDog_Q/B1YaWf50Ze
