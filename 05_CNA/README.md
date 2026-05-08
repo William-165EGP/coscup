@@ -7,11 +7,17 @@ Compact NUMA-aware Locks, also known as CNA, are NUMA-aware Locks. Their advanta
 ### Data Structure (CNA metadata)
 The next plot shows the data structure in Linux kernel, which is a little bit different from userspace implementaion
 
-Kernel CNA queue node:
+<details>
 
-   +------+------------------+------+------------------+--------------+
-   | next | locked           | tail | socket_and_count | encoded_tail |
-   +------+------------------+------+------------------+--------------+
+<summary>Kernel CNA queue node</summary>
+
+```text
++------+------------------+------+------------------+--------------+
+| next | locked           | tail | socket_and_count | encoded_tail |
++------+------------------+------+------------------+--------------+
+```
+
+</details>
 
 The usage of each member is described below:
 1. `next` links this CNA node to the next node in the queue.
@@ -32,9 +38,19 @@ The usage of each member is described below:
 ### The Design of CNA
 To better show the design of CNA, the data structure is simplified and moved as below
 
-   +------+------------------+----------------+------+
-   | spin | NUMA/socket id   | secondary_tail | next |
-   +------+------------------+----------------+------+
+<details>
+
+<summary>simplified CNA node structure</summary>
+
+```text
+
++------+------------------+----------------+------+
+| spin | NUMA/socket id   | secondary_tail | next |
++------+------------------+----------------+------+
+
+```
+
+</details>
 
 This simplified structure is similar to the kernel CNA queue node but with a few differences:
 1. The `spin` is the same as `locked`
@@ -42,29 +58,49 @@ This simplified structure is similar to the kernel CNA queue node but with a few
 3. The `secondary_tail` is the same as `tail`
 
 We defined the address as `a` and initialized queue as following graph:
-   
-           t1                   t2                   t3                   t4                   t5                   t6
-   +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
-   | 1 | 0 |   | ------>| 0 | 1 |   | ------>| 0 | 1 |   | ------>| 0 | 0 |   | ------>| 0 | 0 |   | ------>| 0 | 1 |   |   |
-   +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
+
+<details>
+
+<summary>initialized queue</summary>
+
+```text
+
+       t1                    t2                  t3                    t4                  t5                    t6
++---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
+| 1 | 0 |   | ------>| 0 | 1 |   | ------>| 0 | 1 |   | ------>| 0 | 0 |   | ------>| 0 | 0 |   | ------>| 0 | 1 |   |   |
++---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
+
+```
+
+</details>
 
 1. Now `t1` wants to handoff the ownership
    * `find_successor` finds out the nodes between `t1` to `t4` (excluding `t1` and `t4`) have different NUMA/socket id; hence needs to move it to secondary queue
    * Saves the pointer of head of secondary queue head `t2` to the next handoff `t4`   
 
-            t4                    t5                    t6
-      +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
-      |   | 0 |   | ------>| 0 | 0 |   | ------>| 0 | 1 |   |   |
-      +---+---+---+--+     +---+---+---+--+     +---+---+---+--+
-        |
-        |
-        +--------------------------------------------------------------+
-                                                                       |
-                                                                       v
-                                                                  t2                    t3
-                                                            +---+---+---+--+     +---+---+---+--+
-                                                            | 0 | 1 |   | ------>| 0 | 1 |   |   |
-                                                            +---+---+---+--+     +---+---+---+--+
-                                                                      |
-                                                                      |
-                                                                      +---------> secondaryTail = t3
+<details>
+
+<summary>first step</summary>
+
+```text
+
+t4                    t5                    t6
++---+---+---+--+     +---+---+---+--+     +---+---+---+--+
+|   | 0 |   | ------>| 0 | 0 |   | ------>| 0 | 1 |   |   |
++---+---+---+--+     +---+---+---+--+     +---+---+---+--+
+|
+|
++--------------------------------------------------------------+
+                                                               |
+                                                               v
+                                                              t2                    t3
+                                                       +---+---+---+--+     +---+---+---+--+
+                                                       | 0 | 1 | | | ------>| 0 | 1 |   |   |
+                                                       +---+---+-|-+--+     +---+---+---+--+
+                                                                 |
+                                                                 |
+                                                                 +---------> secondaryTail = t3
+
+```
+
+</details>
