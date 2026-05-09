@@ -284,7 +284,8 @@ We defined the address as `a` and initialized queue as following graph:
 
 ### The Comments from Reviewers
 1. The unfairness aspect may conflict with RT-kernel requirements for deterministic raw spinlocks.
-  The [comment](https://lore.kernel.org/all/20210922192528.ob22pu54oeqsoeno@offworld/) from Davidlohr Bueso
+
+The [comment](https://lore.kernel.org/all/20210922192528.ob22pu54oeqsoeno@offworld/) from Davidlohr Bueso
 
 ```text
 >+	default y
@@ -302,7 +303,7 @@ This would also need a depends on !PREEMPT_RT, no? Raw spinlocks really want
 the determinism.
 ```
 
-  The [comment](https://lore.kernel.org/all/20190131100009.GB31534@hirez.programming.kicks-ass.net/) from Peter Zijlstra
+The [comment](https://lore.kernel.org/all/20190131100009.GB31534@hirez.programming.kicks-ass.net/) from Peter Zijlstra
 
 ```text
 > Choose the next lock holder among spinning threads running on the same
@@ -333,7 +334,8 @@ Those comments suggest that CNA may sacrifice FIFO fairness, which is unacceptab
 RT kernel requires *determinism* so that user can reason about worst-case latency
 
 2. CNA ignores distance differences between remote NUMA nodes
-  The [comment](https://lore.kernel.org/all/20210930094447.9719-1-21cnbao@gmail.com/) from Barry Song
+
+The [comment](https://lore.kernel.org/all/20210930094447.9719-1-21cnbao@gmail.com/) from Barry Song
 
 ```text
 
