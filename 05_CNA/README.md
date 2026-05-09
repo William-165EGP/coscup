@@ -281,3 +281,69 @@ We defined the address as `a` and initialized queue as following graph:
 ```
 
 </details>
+
+### The Comments from Reviewers
+1. The unfairness aspect may conflict with RT-kernel requirements for deterministic raw spinlocks.
+  The [comment](https://lore.kernel.org/all/20210922192528.ob22pu54oeqsoeno@offworld/) from Davidlohr Bueso
+
+```text
+>+	default y
+>+	help
+>+	  Introduce NUMA (Non Uniform Memory Access) awareness into
+>+	  the slow path of spinlocks.
+>+
+>+	  In this variant of qspinlock, the kernel will try to keep the lock
+>+	  on the same node, thus reducing the number of remote cache misses,
+>+	  while trading some of the short term fairness for better performance.
+>+
+>+	  Say N if you want absolute first come first serve fairness.
+
+This would also need a depends on !PREEMPT_RT, no? Raw spinlocks really want
+the determinism.
+```
+
+  The [comment](https://lore.kernel.org/all/20190131100009.GB31534@hirez.programming.kicks-ass.net/) from Peter Zijlstra
+
+```text
+> Choose the next lock holder among spinning threads running on the same
+> socket with high probability rather than always. With small probability,
+> hand the lock to the first thread in the secondary queue or, if that
+> queue is empty, to the immediate successor of the current lock holder
+> in the main queue.  Thus, assuming no failures while threads hold the
+> lock, every thread would be able to acquire the lock after a bounded
+> number of lock transitions, with high probability.
+> 
+> Note that we could make the inter-socket transition deterministic,
+> by sticking a counter of intra-socket transitions in the head node
+> of the secondary queue. At the handoff time, we could increment
+> the counter and check if it is below a threshold. This adds another
+> field to queue nodes and nearly-certain local cache miss to read and
+> update this counter during the handoff. While still beating stock,
+> this variant adds certain overhead over the probabilistic variant.
+
+(also heavily suffers from the socket == node confusion)
+
+How would you suggest RT 'tunes' this?
+
+RT relies on FIFO fairness of the basic spinlock primitives; you just
+completely wrecked that.   
+```
+
+Those comments suggest that CNA may sacrifice FIFO fairness, which is unacceptable for RT kernel
+RT kernel requires *determinism* so that user can reason about worst-case latency
+
+2. CNA ignores distance differences between remote NUMA nodes
+  The [comment](https://lore.kernel.org/all/20210930094447.9719-1-21cnbao@gmail.com/) from Barry Song
+
+```text
+
+do we need to consider the distances of numa nodes in the secondary
+queue? does it still make sense to treat everyone else equal in
+secondary queue?
+
+Thanks
+barry
+
+```
+
+Using NUMA-node-based classification is too coarse. We should also consider the CPU-to-CPU locality, such as LLC sharing, chiplet topology, or inter-node distance
