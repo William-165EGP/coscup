@@ -58,7 +58,7 @@ This simplified structure is similar to the kernel CNA queue node but with a few
 2. The `NUMA/socket id` is `socket_and_count` but without count
 3. The `secondary_tail` is the same as `tail`
 
-We defined the address as `a` and initialized queue as following graph:
+The queue is initialized with following graph, which covers most cases:
 
 <details>
 
