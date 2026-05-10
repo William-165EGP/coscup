@@ -45,3 +45,25 @@ void release_ticket_lock(ticket_lock_type *ticket_lock) {
 }
 
 ```
+#### Lock Section
+The function `atomic_fetch_add_explicit` atomically increments the number of `next_ticket` by `1` and returns its previous value.
+This previous value is stored in `my_ticket`, and represents the ticket number assigned to the current thread.
+The basic pseudo code can be written as below:
+
+```c
+
+my_ticket = next_ticket++;
+
+```
+
+The thread repeatedly loads `now_serving` until its value equals `my_ticket`.
+Therefore, a thread uses function `atomic_load_explicit` in a while loop until `now_serving` reaches its ticket number.
+Once `now_serving` equals to `my_ticket`, that thread can enter the critical section.
+
+The memory order `memory_order_acquire` is used here to prevent memory operations inside the critical section being reordered before the lock is acquired. 
+
+#### Unlock Section
+The function `atomic_fetch_add_explicit` increments the number of `now_serving` by `1`.
+This advances the serving number, so that the thread with the next ticket number can enter the critical section.
+
+The memory order `memory_order_release` is used here to prevent memory operations inside the critical section being reordered after the lock is released. 
