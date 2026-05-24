@@ -12,15 +12,15 @@ The basic implementation of a test-and-set lock is shown below:
 
 #include <stdatomic.h>
 
-typedef atomic_int tns_lock_type;
+typedef atomic_int tas_lock_type;
 
-void acquire_tns_lock(tns_lock_type *lock){
+void acquire_tas_lock(tas_lock_type *lock){
   while (atomic_exchange_explicit(lock, 1, memory_order_acquire) == 1) {
     // spinning here
   } 
 }
 
-void release_tns_lock(tns_lock_type *lock){
+void release_tas_lock(tas_lock_type *lock){
   atomic_store_explicit(lock, 0 , memory_order_release);
 }
 
