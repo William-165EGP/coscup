@@ -19,14 +19,103 @@ The qspinlock is a compact variant of the MCS lock. Its design tries to balance 
 
 In short, qspinlock keeps a fast path for the common uncontended case, while using an MCS-like queue to provide better fairness and scalability under contention.
 
-### Data Structure
-The global qspinlock lock data structure is encoded in a single 32-bit word. I believe the following reason can explain that:
+### Data Structure (Global Lock Data Structure)
+The global qspinlock lock data structure is encoded in a single 32-bit word. The source code of data structure can be found in `include/asm-generic/qspinlock_types.h`
 
-1. **Compatible with 32-bit architecture:**
-  Although most modern processors are 64-bit, Linux still supports many 32-bit architectures. Keeping qspinlock within a 32-bit word makes the lock state easier to manipulate with native atomic operations such as `cmpxchg`.
-  If the lock state requires more than 32 bits, some 32-bit architectures might not be able to update it atomically with a single instruction.
-  This would make the implementation more expensive and could require additional synchronization mechanisms. 
-  An example that only supports 32-bit `cmpxchg` is older 32-bit ARM, where Linux explicitly notes that on `arch/arm/include/asm/cmpxchg.h`
+<details>
+
+<summary>data structure of qspinlock</summary>
+
+```c
+
+typedef struct qspinlock {
+	union {
+		atomic_t val;
+
+		/*
+		 * By using the whole 2nd least significant byte for the
+		 * pending bit, we can allow better optimization of the lock
+		 * acquisition for the pending bit holder.
+		 */
+#ifdef __LITTLE_ENDIAN
+		struct {
+			u8	locked;
+			u8	pending;
+		};
+		struct {
+			u16	locked_pending;
+			u16	tail;
+		};
+#else
+		struct {
+			u16	tail;
+			u16	locked_pending;
+		};
+		struct {
+			u8	reserved[2];
+			u8	pending;
+			u8	locked;
+		};
+#endif
+	};
+} arch_spinlock_t;
+
+```
+
+</details>
+Note that we only discuss little_endian and nprocs is smaller than 16K here. The size of every fields are below:
++---------+------+
+| field   | size |
++---------+------+
+| locked  |   8  |
++---------+------+
+| pending |   8  |
++---------+------+
+| tail    |  16  |
++---------+------+
+The size of every field is deliberately designed as above, and it is likely to be compiled with efficient instruction.
+We define the address of global lock variable is in register `rdi`, the `esi` is field `tail`, and the compiled efficient may be below:
+
+
+1. `locked`: It is likely to be compiled with this `movb` instruction when unlocking the lock. Therefore, the unlock path can be efficient
+
+```asm
+movb $0, 0(%rdi)
+```
+
+2. `pending`: It is likely to be compiled with this `movb` instruction when leaving the `pending`. Therefore, the leaving can be efficient
+3. `locked_pending`: It is likely to be compiled with this `movw` instruction when clearing `pending` and set `locked`. Therefore, can be efficient
+
+```asm
+mobw $1, 0(%rdi)
+```
+
+4. `tail`: It is likely to be compiled with this `xchgw` instruction when `xchg_tail`. Therefore, this operation is more efficient. The following source code and example asm (for demo only) is below
+
+```c
+// The _Q_TAIL_OFFSET is 16 as the data structure 32 - sizeof(locked) - sizeof(pending)
+static __always_inline u32 xchg_tail(struct qspinlock *lock, u32 tail)
+{
+	return (u32)xchg_relaxed(&lock->tail,
+				 tail >> _Q_TAIL_OFFSET) << _Q_TAIL_OFFSET;
+}
+```
+
+```asm
+shrl $16, %esi     # tail >> _Q_TAIL_OFFSET
+xchgw %si, 2(%rdi) # exchange u16 with lock->tail
+movzwl %si, %eax   # old tail value
+shll $16, %eax     # return old_tail << _Q_TAIL_OFFSET
+ret
+```
+
+With the size limitation (32 bits) of global lock data structure, and I believe the following reason can explain that:
+
+1. Compatible with 32-bit architecture:
+Although most modern processors are 64-bit, Linux still supports many 32-bit architectures. Keeping qspinlock within a 32-bit word makes the lock state easier to manipulate with native atomic operations such as `cmpxchg`.
+If the lock state requires more than 32 bits, some 32-bit architectures might not be able to update it atomically with a single instruction.
+This would make the implementation more expensive and could require additional synchronization mechanisms. 
+An example that only supports 32-bit `cmpxchg` is older 32-bit ARM, where Linux explicitly notes that on `arch/arm/include/asm/cmpxchg.h`
 
 <details>
 
@@ -100,19 +189,19 @@ static inline unsigned long __cmpxchg(volatile void *ptr, unsigned long old,
   ```
 </details>
 
-2. **Keep the memory usage low:**
-	Spinlocks are used to provide synchronization, so their own memory overhead should be as small as possible.
-	Since spinlocks are often embedded directly inside kernel data structures, increasing the size of each lock would also increase the size of every object that contains one.
+2. Keep the memory usage low:
+Spinlocks are used to provide synchronization, so their own memory overhead should be as small as possible.
+Since spinlocks are often embedded directly inside kernel data structures, increasing the size of each lock would also increase the size of every object that contains one.
 
-	This matters because there can be many lock instances in the kernel.
-	For example, in mm (memory management), split page table lock can place a lock at the granularity of a page-table page.
-	On a typical 4KB-page system, one PTE page maps 2MB of virtual memory address space, so mapping 32GB with normal 4KB pages may require about 16384 PTE pages, and therefore up to roughly 16384 PTE-level lock instances.
+This matters because there can be many lock instances in the kernel.
+For example, in mm (memory management), split page table lock can place a lock at the granularity of a page-table page.
+On a typical 4KB-page system, one PTE page maps 2MB of virtual memory address space, so mapping 32GB with normal 4KB pages may require about 16384 PTE pages, and therefore up to roughly 16384 PTE-level lock instances.
 
-	Below is the data structure of `ptdesc`, which can be found in `include/linux/mm_types.h`
-	It contains `ptl`, the page-table lock used by split page table lock.
+Below is the data structure of `ptdesc`, which can be found in `include/linux/mm_types.h`
+It contains `ptl`, the page-table lock used by split page table lock.
 
-	Keeping `arch_spinlock_t` compact reduces memory overhead and also helps to reduce cache footprint.
-	This is especially important for small-memory systems and embedded systems, where both RAM capacity and cache capacity are limited.
+Keeping `arch_spinlock_t` compact reduces memory overhead and also helps to reduce cache footprint.
+This is especially important for small-memory systems and embedded systems, where both RAM capacity and cache capacity are limited.
 
 <details>
 
