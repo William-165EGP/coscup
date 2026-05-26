@@ -311,3 +311,53 @@ The original comment can be found in `kernel/locking/qspinlock.c`
     |                                  |
 lower bit                          higher bit
 ```
+
+### Local MCS Spinlock Structure
+The mcs node, also known as `mcs_spinlock`, is used to build a waiting queue among CPUs that are competing for the same lock.
+Its definition can be found in `include/asm-generic/mcs_spinlock.h`
+
+<details>
+
+<summary>Definition of mcs_spinlock</summary>
+
+```c
+struct mcs_spinlock {
+	struct mcs_spinlock *next;
+	int locked; /* 1 if lock acquired */
+	int count;  /* nesting count, see qspinlock.c */
+};
+```
+
+</details>
+
+#### MCS Spinlock Fields
+An `mcs_spinlock` node only contains three following fields
+##### 1. `next`:
+The `next` field points to the next MCS node in the waiting queue.
+It is used to link waiting CPUs together.
+##### 2. `locked`:
+The `locked` has two states:
+
+* `0`: The node should keep spinning.
+* `1`: The node becomes the queue head and is allowed to contend for the global lock.
+##### 3. `count`:
+The `count` field tracks the nesting level of MCS nodes on the same CPU.
+In qspinlock, each CPU has a limited set of local MCS nodes for different contexts, such as task, softirq, hardirq, and NMI.
+The nesting count helps select the appropriate local node when lock contention occurs in nested contexts.
+
+#### The Diagram of MCS Spinlock
+For clarity, we can abstract the global qspinlock layout as follows.
+
+This presentation removes the `count` field because we won't discuss later.
+
+```text
++--------+------+
+| locked | next |
++--------+------+
+
+Example Usage:
+
++---+---+     +---+---+     +---+---+
+| 1 | ------->| 0 | ------->| 0 |   |
++---+---+     +---+---+     +---+---+
+```
