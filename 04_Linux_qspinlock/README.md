@@ -19,12 +19,12 @@ The qspinlock is a compact variant of the MCS lock. Its design tries to balance 
 
 In short, qspinlock keeps a fast path for the common uncontended case, while using an MCS-like queue to provide better fairness and scalability under contention.
 
-### Data Structure (Global Lock Data Structure)
-The global qspinlock lock data structure is encoded in a single 32-bit word. The source code of data structure can be found in `include/asm-generic/qspinlock_types.h`
+### Global qspinlock Structure
+The global qspinlock is represented as a single 32-bit word. Its definition can be found in `include/asm-generic/qspinlock_types.h`
 
 <details>
 
-<summary>data structure of qspinlock</summary>
+<summary>Definition of qspinlock</summary>
 
 ```c
 
@@ -63,9 +63,9 @@ typedef struct qspinlock {
 ```
 
 </details>
-Note that we only discuss little_endian and nprocs is smaller than 16K here. The size of every fields are below:
+Here, we only consider the little-endian case where nprocs is less than 16K. The sizes of the fields are shown below:
 +---------+------+
-| field   | size |
+| field   | bits |
 +---------+------+
 | locked  |   8  |
 +---------+------+
@@ -73,27 +73,38 @@ Note that we only discuss little_endian and nprocs is smaller than 16K here. The
 +---------+------+
 | tail    |  16  |
 +---------+------+
-The size of every field is deliberately designed as above, and it is likely to be compiled with efficient instruction.
-We define the address of global lock variable is in register `rdi`, the `esi` is field `tail`, and the compiled efficient may be below:
+These field sizes are deliberately chosen so that some operations can be compiled into efficient instructions.
+
+Assume that the address of the global lock variable is stored in `%rdi`, and the new `tail` value is stored in `%esi`.
+With this layout, the compiler may generate efficient byte- or word-sized instructions for several common operarions:
 
 
-1. `locked`: It is likely to be compiled with this `movb` instruction when unlocking the lock. Therefore, the unlock path can be efficient
+1. `locked`: When releasing the lock, the compiler can clear only the `locked` byte using a single `movb` instruction.
+This makes the unlock path efficient.
 
 ```asm
 movb $0, 0(%rdi)
 ```
 
-2. `pending`: It is likely to be compiled with this `movb` instruction when leaving the `pending`. Therefore, the leaving can be efficient
-3. `locked_pending`: It is likely to be compiled with this `movw` instruction when clearing `pending` and set `locked`. Therefore, can be efficient
+2. `pending`: Similarly, when clearing the `pending` byte, the compiler can use a single byte store.
 
 ```asm
-mobw $1, 0(%rdi)
+movb $0, 1(%rdi)
 ```
 
-4. `tail`: It is likely to be compiled with this `xchgw` instruction when `xchg_tail`. Therefore, this operation is more efficient. The following source code and example asm (for demo only) is below
+3. `locked_pending`: Since `locked` and `pending` occupy the lower 16 bits, the compiler can update them together with a single 16-bit store.
+For example, it can clear `pending` and set `locked` at the same time:
+
+```asm
+movw $1, 0(%rdi)
+```
+This writes `locked = 1` and `pending = 0` in one instruction, and the field `locked_pending` is used here. 
+
+4. `tail`: In `xchg_tail()`, the compiler can use a 16-bit `xchgw` instruction to exchange only the `tail` field. This avoids touching the lower 16 bits, which contain `locked` and `pending`.
+The following source code and example assembly illustrate this optimization. The exact generated assembly may vary by compiler and configuration:
 
 ```c
-// The _Q_TAIL_OFFSET is 16 as the data structure 32 - sizeof(locked) - sizeof(pending)
+// The _Q_TAIL_OFFSET is 16 because `locked` and `pending` occupy the lower 16 bits.
 static __always_inline u32 xchg_tail(struct qspinlock *lock, u32 tail)
 {
 	return (u32)xchg_relaxed(&lock->tail,
@@ -109,13 +120,18 @@ shll $16, %eax     # return old_tail << _Q_TAIL_OFFSET
 ret
 ```
 
-With the size limitation (32 bits) of global lock data structure, and I believe the following reason can explain that:
+These examples show why the fields in the global lock are arranged in this way.
+By placing `locked` and `pending` in the lower 16 bits and `tail` in the upper 16 bits, several common operations can be implemented with byte- or word-sized instructions, without unnecessarily modifying neighboring fields.
 
-1. Compatible with 32-bit architecture:
+The 32-bit size of the global qspinlock is also a deliberate design choice.
+There are two main reasons for keeping the lock state within a single 32-bit word:
+
+1. Compatibility with 32-bit architectures:
 Although most modern processors are 64-bit, Linux still supports many 32-bit architectures. Keeping qspinlock within a 32-bit word makes the lock state easier to manipulate with native atomic operations such as `cmpxchg`.
-If the lock state requires more than 32 bits, some 32-bit architectures might not be able to update it atomically with a single instruction.
+If the lock state required more than 32 bits, some 32-bit architectures might not be able to update it atomically with a single native instruction.
 This would make the implementation more expensive and could require additional synchronization mechanisms. 
-An example that only supports 32-bit `cmpxchg` is older 32-bit ARM, where Linux explicitly notes that on `arch/arm/include/asm/cmpxchg.h`
+Older 32-bit ARM provides a good example of this constraint.
+In `arch/arm/include/asm/cmpxchg.h`, Linux explicitly notes that `cmpxchg` only supports 32-bit operands on ARMv6:
 
 <details>
 
@@ -189,16 +205,16 @@ static inline unsigned long __cmpxchg(volatile void *ptr, unsigned long old,
   ```
 </details>
 
-2. Keep the memory usage low:
-Spinlocks are used to provide synchronization, so their own memory overhead should be as small as possible.
-Since spinlocks are often embedded directly inside kernel data structures, increasing the size of each lock would also increase the size of every object that contains one.
+2. Keeping memory overhead low:
+Spinlocks are synchronization primitives, and they are often embedded directly inside kernel data structures.
+Therefore, their own memory overhead must be kept as small as possible.
 
 This matters because there can be many lock instances in the kernel.
-For example, in mm (memory management), split page table lock can place a lock at the granularity of a page-table page.
-On a typical 4KB-page system, one PTE page maps 2MB of virtual memory address space, so mapping 32GB with normal 4KB pages may require about 16384 PTE pages, and therefore up to roughly 16384 PTE-level lock instances.
+For example, in the memory-management subsystem, split page table lock can place locks at the granularity of page-table pages.
+On a typical 4KB-page system, one PTE page maps 2MB of virtual memory address space. Therefore, mapping 32GB of virtual memory with normal 4KB pages may require up to about 16384 PTE pages, and thus up to roughly 16384 PTE-level lock instances, depending on how the page tables are populated and configured.
 
 Below is the data structure of `ptdesc`, which can be found in `include/linux/mm_types.h`
-It contains `ptl`, the page-table lock used by split page table lock.
+It contains `ptl`, which is either an embedded `spinlock_t` or a pointer to one, depending on the configuration.
 
 Keeping `arch_spinlock_t` compact reduces memory overhead and also helps to reduce cache footprint.
 This is especially important for small-memory systems and embedded systems, where both RAM capacity and cache capacity are limited.
@@ -249,3 +265,20 @@ struct ptdesc {
 ```
 
 </details>
+
+Therefore, the 32-bit qspinlock design reflects considerations across both architecture support and subsystem-level momory overhead.
+
+For clarity, we can abstract the global qspinlock layout as follows.
+Note that this diagram shows the lower bits on the left and the higher bits on the right, which is the opposite of the convention used in the original qspinlock comment.
+This presentation is chosen because the `tail` field will later be used to explain MCS node enqueueing.
+The original comment can be found in `kernel/locking/qspinlock.c` 
+
+```text
+    +--------+--------+----------------+
+    | locked |pending |      tail      |
+    +--------+--------+----------------+
+    ^                                  ^
+    |                                  |
+    |                                  |
+lower bit                          higher bit
+```
