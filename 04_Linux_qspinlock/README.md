@@ -64,6 +64,7 @@ typedef struct qspinlock {
 
 </details>
 Here, we only consider the little-endian case where nprocs is less than 16K. The sizes of the fields are shown below:
+
 ```text
 +---------+------+
 | field   | bits |
@@ -75,11 +76,11 @@ Here, we only consider the little-endian case where nprocs is less than 16K. The
 | tail    |  16  |
 +---------+------+
 ```
+
 These field sizes are deliberately chosen so that some operations can be compiled into efficient instructions.
 
 Assume that the address of the global lock variable is stored in `%rdi`, and the new `tail` value is stored in `%esi`.
 With this layout, the compiler may generate efficient byte- or word-sized instructions for several common operarions:
-
 
 1. `locked`: When releasing the lock, the compiler can clear only the `locked` byte using a single `movb` instruction.
 This makes the unlock path efficient.
@@ -100,6 +101,7 @@ For example, it can clear `pending` and set `locked` at the same time:
 ```asm
 movw $1, 0(%rdi)
 ```
+
 This writes `locked = 1` and `pending = 0` in one instruction, and the field `locked_pending` is used here. 
 
 4. `tail`: In `xchg_tail()`, the compiler can use a 16-bit `xchgw` instruction to exchange only the `tail` field. This avoids touching the lower 16 bits, which contain `locked` and `pending`.
