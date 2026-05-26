@@ -292,6 +292,7 @@ struct ptdesc {
 
 </details>
 
+##### Structure Size Summary
 Therefore, the 32-bit qspinlock design reflects considerations across both architecture support and subsystem-level momory overhead.
 
 #### The Diagram of qspinlock

@@ -2,8 +2,8 @@
 ### Introduction
 RCU (Read-Copy-Update) is a synchronization mechanism designed for read-mostly workloads.
 Its main goal is to make read-side critical sections extremely cheap by avoiding lock acquisition on the read path.
-
 Read-write locks also target workloads with many more readers than writers, allowing multiple readers to enter critical sections concurrently.
+
 However, readers still have to acquire and release the lock.
 This usually involves atomic operations that modify shared lock state,
 which can cause cache-line bouncing when many CPUs repeatedly enter and leave critical sections.
@@ -13,9 +13,11 @@ Instead, writers publish a new version of the data structure and defer freeing t
 
 The simplest idea behind RCU is to update a pointer to an RCU-protected object.
 A writer prepares a new version of the object and then publishes it by atomically updating the pointer with proper memory-ordering guarantees.
+
 That is, the object must be fully initialized before the pointer is published, so readers will never see an incomplete or partially initialized object.
 Readers that have already entered an RCU read-side critical section may still hold a reference to the old object.
 Therefore, the old object cannot be freed immediately.
+
 The writer must wait for a grace period, ensuring that all pre-existing readers have finished, before reclaiming the old object.
 This prevents use-after-free bugs.
 <details>

@@ -1,8 +1,11 @@
 ## Test-and-Set Lock
 ### Introduction
 A test-and-set lock is one of the simplest ways to implement a lock.
+
 The core idea is to use a single shared variable, usually called `lock`. All threads that want to enter the critical section repeatedly execute an atomic test-and-set operation on this variable until they successfully acquire the lock.
+
 The value of this lock is not that it is used directly in modern kernels, but that it clearly demonstrates the fundamental idea behind synchronization: an atomic instruction can combine reading and writing into one indivisible operation.
+
 In other words, when one CPU performs the test-and-set operation, no other CPU can interrupt it in the middle. This guarantees that only one thread can successfully acquire the lock at a time.
 
 ### Implementation
@@ -48,6 +51,7 @@ As modern systems develop, machines contain more and more cores. Therefore, the 
 
 #### 1. Cache Coherence Traffic
 One major disadvantage of a test-and-set lock is that it causes heavy cache coherence traffic.
+
 In the lock section, every waiting thread repeatedly executes `atomic_exchange_explicit`. This operation is a write operation, so even if the value of `lock` is already `1`, the CPU still tries to write `1` to the same shared variable.
 Because the lock variable is stored in a cache line shared by multiple CPUs, each atomic exchange may invalidate the cache line in other CPUs' caches. When many threads are spinning on the same lock, the cache line containing `lock` keeps moving between CPUs.
 
@@ -69,5 +73,7 @@ Although a basic test-and-set lock has several scalability problems, it still ha
 #### 1. Efficient Fast Path
 
 A test-and-set lock is efficient when there is no contention. If the lock is free, a thread can acquire it with a single atomic operation.
+
 This idea is still used in more advanced lock implementations. Although modern locks often have more complex slow paths to handle contention, their fast paths usually still try to acquire the lock immediately using a simple atomic operation.
+
 Therefore, the value of a test-and-set lock is not only its simplicity. Many practical locks still use the same idea in their fast path: first try to acquire the lock with a simple atomic operation, and only enter the slow path when contention occurs.
