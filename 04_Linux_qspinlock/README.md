@@ -64,6 +64,7 @@ typedef struct qspinlock {
 
 </details>
 Here, we only consider the little-endian case where nprocs is less than 16K. The sizes of the fields are shown below:
+```text
 +---------+------+
 | field   | bits |
 +---------+------+
@@ -73,6 +74,7 @@ Here, we only consider the little-endian case where nprocs is less than 16K. The
 +---------+------+
 | tail    |  16  |
 +---------+------+
+```
 These field sizes are deliberately chosen so that some operations can be compiled into efficient instructions.
 
 Assume that the address of the global lock variable is stored in `%rdi`, and the new `tail` value is stored in `%esi`.
@@ -208,14 +210,11 @@ static inline unsigned long __cmpxchg(volatile void *ptr, unsigned long old,
 2. Keeping memory overhead low:
 Spinlocks are synchronization primitives, and they are often embedded directly inside kernel data structures.
 Therefore, their own memory overhead must be kept as small as possible.
-
 This matters because there can be many lock instances in the kernel.
 For example, in the memory-management subsystem, split page table lock can place locks at the granularity of page-table pages.
 On a typical 4KB-page system, one PTE page maps 2MB of virtual memory address space. Therefore, mapping 32GB of virtual memory with normal 4KB pages may require up to about 16384 PTE pages, and thus up to roughly 16384 PTE-level lock instances, depending on how the page tables are populated and configured.
-
 Below is the data structure of `ptdesc`, which can be found in `include/linux/mm_types.h`
 It contains `ptl`, which is either an embedded `spinlock_t` or a pointer to one, depending on the configuration.
-
 Keeping `arch_spinlock_t` compact reduces memory overhead and also helps to reduce cache footprint.
 This is especially important for small-memory systems and embedded systems, where both RAM capacity and cache capacity are limited.
 
