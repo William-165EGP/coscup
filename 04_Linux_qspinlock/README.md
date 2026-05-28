@@ -879,3 +879,217 @@ If this node was the first node in the queue, there was no previous MCS node to 
 	}
 ```
 </details>
+
+##### Case 3-2: The Queue Head Claims the Global Lock
+In this case, the contender has finally becomes the head of the MCS waitqueue.
+Therefore, it is eligible to contend for the global lock.
+
+This case can be divided into four steps:
+
+1. Spin until `locked` and `pending` are cleared:
+
+	The contender spins until both the `locked` and `pending` are cleared.
+	That is, the global lock value may still contain `tail`, but both `locked` and `pending` must be `0`.
+
+2. Check whether the contender is also the queue tail:
+
+	The contender checks whether it is also the queue tail.
+	That is, it checks whether the `tail` field in the global lock value equals its local `tail`.
+
+	If the contender is also the queue tail, then it is the only node in the MCS waitqueue.
+	In that case, it tries to tomically change the global lock value to `_Q_LOCK_VAL`.
+	That is, it clears `tail` to `0` and sets `locked` to `1` at the same time.
+
+	If the atomic try succeeds, the contender has acquired the global lock and there is no MCS successor to release.
+
+	If the atomic try fails, either a new contender has enqueued itself into the MCS waitqueue, or a new pending contender has set `_Q_PENDING_VAL`.
+	In this case, the contender has to go to the next step.
+
+	If the contender is not the queue tail, then there is already another contender behind it.
+	In this case, it also has to go to the next step.
+	
+	Note that the incoming would only enqueue itself to MCS waitqueue. See step 3 in [Case 2-1](#case-2-1-waiting-for-the-pending-cpu-to-acquire-lock)
+
+3. Set the global `locked` to 1:
+
+	At this point, the contender is the MCS queue head and is allowed to claim the global lock.
+
+	Since it has already observed that both `locked` and `pending` are `0`, it can set the global `locked` to `1`.
+
+	Note that the contender has the ownership of this global lock, so set the global `locked` does not require any atomic operation.
+
+	This operation claims the global lock without clearing the `tail` field, because the queue is still contended.
+	
+4. Release the MCS successor:
+
+	If the contender has a successor, it releases the successor's MCS node.
+
+	This completes the MCS handoff and allows the successor to become the queue head.
+
+	If the successor has not been observed yet, the contender waits until its `next` pointer becomes non-`NULL`.
+
+Note that the `locked` field in the head MCS node does not necessarily have to be `1` in the diagram it's queue tail.
+If this node was the first node in the queue, there was no previous MCS node to release it, so its `locked` field may not have been written to `1`.
+
+<details>
+
+<summary>Diagram of claiming the global lock and it's queue tail</summary>
+
+```text
+
+      |
+      | 1. Spin until `locked` and `pending` are cleared
+      |
+      V
+
++---+---+---+
+| 0 | 0 | ------+
++---+---+---+   |
+                |
+                v
+              head             
+            +---+---+      
+            | * |   |      
+            +---+---+     
+
+      |
+      | 2. The contender is also queue tail.
+      |    Clear `tail` and set global `locked` to `1`
+      |
+      V
+
++---+---+---+
+| 1 | 0 |   |
++---+---+---+
+
+                
+              head             
+            +---+---+      
+            | * |   |      
+            +---+---+     
+```
+
+</details>
+
+
+<details>
+
+<summary>Diagram of claiming the global lock and it's not queue tail</summary>
+
+```text
+
+      |
+      | 1. Spin until `locked` and `pending` are cleared
+      |
+      V
+
++---+---+---+
+| 0 | 0 | --------------------*
++---+---+---+                 
+                              
+                              
+              head            
+            +---+---+     +---+---+ 
+            | 1 | ------->| 0 | * |     
+            +---+---+     +---+---+
+
+      |
+      | 2. The contender is not the queue tail 
+      |
+      V
+
+      |
+      | 3. Set the global `locked` to `1`
+      |
+      V
+
++---+---+---+
+| 1 | 0 | --------------------*
++---+---+---+                 
+                              
+                              
+              head             
+            +---+---+     +---+---+ 
+            | 1 | ------->| 0 | * |     
+            +---+---+     +---+---+
+
+      |
+      | 4. Release the MCS successor
+      |
+      V
+
++---+---+---+
+| 1 | 0 | --------------------*
++---+---+---+                 
+                              
+                              
+            prev head      new head        
+            +---+---+     +---+---+ 
+            | 1 | ------->| 1 | * |     
+            +---+---+     +---+---+
+```
+
+</details>
+
+<details>
+
+<summary>Source code of case 3-2</summary>
+
+```c
+	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
+
+locked:
+	/*
+	 * claim the lock:
+	 *
+	 * n,0,0 -> 0,0,1 : lock, uncontended
+	 * *,*,0 -> *,*,1 : lock, contended
+	 *
+	 * If the queue head is the only one in the queue (lock value == tail)
+	 * and nobody is pending, clear the tail code and grab the lock.
+	 * Otherwise, we only need to grab the lock.
+	 */
+
+	/*
+	 * In the PV case we might already have _Q_LOCKED_VAL set, because
+	 * of lock stealing; therefore we must also allow:
+	 *
+	 * n,0,1 -> 0,0,1
+	 *
+	 * Note: at this point: (val & _Q_PENDING_MASK) == 0, because of the
+	 *       above wait condition, therefore any concurrent setting of
+	 *       PENDING will make the uncontended transition fail.
+	 */
+	if ((val & _Q_TAIL_MASK) == tail) {
+		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL))
+			goto release; /* No contention */
+	}
+
+	/*
+	 * Either somebody is queued behind us or _Q_PENDING_VAL got set
+	 * which will then detect the remaining tail and queue behind us
+	 * ensuring we'll see a @next.
+	 */
+	set_locked(lock);
+
+	/*
+	 * contended path; wait for next if not observed yet, release.
+	 */
+	if (!next)
+		next = smp_cond_load_relaxed(&node->next, (VAL));
+
+	arch_mcs_spin_unlock_contended(&next->locked);
+```
+
+</details>
+
+### Conclusion
+In summary, qspinlock first tries to acquire the lock through the fast path.
+
+If the lock is already held, it enters the slow path and tries to use the `pending` state as a lightweight handoff mechanism.
+From this design, we can infer the common case is expected to be simple: one CPU holds the lock, another CPU waits briefly for it.
+
+However, when contention becomes stronger, the contender gives up the pending path and enqueues itself into the MCS waitqueue.
+After it becomes the queue head, it waits until both `locked` and `pending` are cleared, then claims the global lock.
+
+This design keeps the uncontended case fast, reduces unnecessary queueing in light contention, and uses the MCS queue to preserve fairness and reduce cache-coherence traffic when multiple contenders are spinning.
