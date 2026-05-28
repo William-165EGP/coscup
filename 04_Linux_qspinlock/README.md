@@ -752,3 +752,89 @@ The following diagram only shows the condition where the earlier contender was e
 
 This operation yields to contenders that were already present before this CPU set `pending`.
 It prevents the current contender from stealing the pending path and helps preserve the fairness of the queued slow path.
+#### Case 3
+This case shows the contender is in slow-path, and tries to enqueue itself.
+##### Case 3-1: The Contender Enqueues Itself into the MCS Waitqueue
+In this case, the contender enqueues itself into the MCS waitqueue.
+
+This case can be divided into four steps:
+
+1. Exchange itself into the `tail` field of the global lock value:
+
+	This contender atomically exchanges its own tail into the global lock value, so that the next contender can find it.
+
+2. Check whether there is a previous contender:
+
+	This contender checks whether there is a previous contender by masking the old lock value with `_Q_TAIL_MASK`.
+
+	If the masked value is `0`, there is no previous contender.
+	This contender becomes the queue head and can go to next case.
+
+	If the masked value is non-zero, there is a previous contender. This contender should go to the next step.
+
+3. Link itself after the previous contender's node:
+
+	This contender links itself after the previous contender's MCS node, so that the previous contender can find its own successor.
+
+4. Spin until it is allowed to contend for the global lock:
+
+	This contender spins on its `locked` field until the previous contender releases it.
+
+	After this MCS handoff, this contender becomes the head of the waitqueue and is allowed to contend for the global lock.
+
+The following diagram only shows the condition where there is a previous contender.
+
+Note that the `locked` field in the head MCS node does not necessarily have to be `1`.
+If this node was the first node in the queue, there was no previous MCS node to release it, so its `locked` field may not have been written to `1`.
+
+<details>
+
+<summary>Diagram of enqueueing into the MCS waitqueue</summary>
+
+```text
+
+      |
+      | 1. Exchange itself into the `tail` field
+      |
+      V
+
++---+---+---+
+| * | * | ---------------------+
++---+---+---+                  |
+                               |
+              head             v
+            +---+---+      +---+---+
+            | * |   |      | 0 |   |
+            +---+---+      +---+---+
+
+      |
+      | 2 & 3. Check whether there's a previous contender,
+      |        and link itself after the previous node
+      |
+      V
+			
++---+---+---+
+| * | * | ---------------------*
++---+---+---+                  
+                               
+              head                 
+            +---+---+      +---+---+
+            | * | -------->| 0 | * |
+            +---+---+      +---+---+
+
+      |
+      | 4. Spin until it is allowed to contend for the global lock
+      |
+      V
+			
++---+---+---+
+| * | * | ---------------------*
++---+---+---+                  
+                               
+              head                 
+            +---+---+      +---+---+
+            | * | -------->| 1 | * |
+            +---+---+      +---+---+
+```
+
+</details>
