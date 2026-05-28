@@ -703,7 +703,7 @@ The following diagram only shows the condition where the earlier contender was e
 
       |
       | 1. This contender accidentally sets the `pending` to `1`,
-			|    but observes that another contender is already present.
+      |    but observes that another contender is already present.
       |
       v
 
