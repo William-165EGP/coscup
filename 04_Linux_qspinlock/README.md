@@ -390,7 +390,7 @@ We use the same diagrams above to demonstrate.
 </details>
 
 #### Case 1:
-This case represents the contender is in fast-path.
+This case shows the contender is in fast-path.
 ##### Case 1: Nobody Holds the Lock
 This is the uncontended fast-path case. The contender can acquire the lock directly without entering the pending state or the MCS queue.
 
@@ -432,7 +432,7 @@ static __always_inline void queued_spin_lock(struct qspinlock *lock)
 </details>
 
 #### Case 2
-This case represents the contender is in slow-path, and try to acquire the pending state.
+This case shows the contender is in slow-path, and tries to acquire the pending state.
 ##### Case 2-1: Waiting for the Pending CPU to Acquire Lock
 In this case, the contender briefly waits for the pending CPU to complete the pending-to-locked handoff.
 
@@ -664,3 +664,91 @@ The following diagram shows only the ideal condition. Note that the field order 
 ```
 
 </details>
+
+##### Case 2-2-1: Observe Contention when Setting Pending
+This is an edge case, you can skip this case if not interested.
+
+There is a short window between checking the `pending` setting the `pending`.
+During this window, another contender may set either `pending` or `tail`.
+In this case, the current contender should yield to the earlier contender.
+
+This case can be divided into two steps:
+
+1. Observe the contention:
+
+	The old lock `val` is the value before the atomic fetch-or operation that sets `pending`.
+
+	If the old `val` has any bit set other than the `locked`, it means there is another contender ahead of this CPU. 
+
+	Therefore, this contender should not continue with the pending path.
+	Instead, it should undo its own change if necessary and go to the queue path.
+
+2. Clear `pending` if it was set by this contender:
+
+	The contender checks whether `pending` was already set in the old lock `val`.
+
+	If `pending` was already `1` in the old lock `val`, then it was set by another contender.
+	In this case, the contender does not need to clear it.
+
+	If the `pending` was `0` in the old lock val, then the atomic fetch-or set `pending` on behalf of this contender.
+	Since this contender is going to give up the pending path and enter the queue, it has to clear `pending`
+
+The following diagram only shows the condition where the earlier contender was expected to own `pending`, but has now enqueued itself as `tail`.
+ 
+<details>
+
+<summary>Diagram of clearing pending after observing contention</summary>
+
+```text
+
+      |
+      | 1. This contender accidentally sets the `pending` to `1`,
+			|    but observes that another contender is already present.
+      |
+      v
+
++---+---+---+
+| * | 1 | ------->
++---+---+---+
+
+      |
+      | 2. Clear the `pending`
+      |
+      v
+			
++---+---+---+
+| * | 0 | ------->
++---+---+---+
+```
+
+</details>
+
+<details>
+
+<summary>Source code of case 2-2-1</summary>
+
+```c
+	val = queued_fetch_set_pending_acquire(lock);
+
+	/*
+	 * If we observe contention, there is a concurrent locker.
+	 *
+	 * Undo and queue; our setting of PENDING might have made the
+	 * n,0,0 -> 0,0,0 transition fail and it will now be waiting
+	 * on @next to become !NULL.
+	 */
+	if (unlikely(val & ~_Q_LOCKED_MASK)) {
+
+		/* Undo PENDING if we set it. */
+		if (!(val & _Q_PENDING_MASK))
+			clear_pending(lock);
+
+		goto queue;
+	}
+
+```
+
+</details>
+
+This operation yields to contenders that were already present before this CPU set `pending`.
+It prevents the current contender from stealing the pending path and helps preserve the fairness of the queued slow path.
