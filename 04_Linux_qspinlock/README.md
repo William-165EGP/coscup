@@ -95,7 +95,7 @@ Here, we only consider the little-endian case where nprocs is less than 16K. The
 These field sizes are deliberately chosen so that some operations can be compiled into efficient instructions.
 
 Assume that the address of the global lock variable is stored in `%rdi`, and the new `tail` value is stored in `%esi`.
-With this layout, the compiler may generate efficient byte- or word-sized instructions for several common operarions:
+With this layout, the compiler may generate efficient byte- or word-sized instructions for several common operations:
 
 ##### 1. `locked`:
 When releasing the lock, the compiler can clear only the `locked` byte using a single `movb` instruction.
@@ -565,8 +565,8 @@ This case can be divided into three steps:
 	This contender can acquire the lock and leave the pending position.
 	So it should set the `locked` byte as `1` and `pending` byte as `0`.
 
-	This contender have the ownership of the lock, so it can directly set the value without atomic operation.
-	Note that set `locked` and `pending` can be done in one operaion, the contender just need to use `locked_pending` field to set `1`
+	This contender has the ownership of the lock, so it can directly set the value without atomic operation.
+	Note that set `locked` and `pending` can be done in one operaion, the contender just needs to use `locked_pending` field to set `1`
 
 The following diagram shows only the ideal condition. Note that the field order in the diagram is different from the order used in the source-code comment.
 
@@ -881,7 +881,7 @@ If this node was the first node in the queue, there was no previous MCS node to 
 </details>
 
 ##### Case 3-2: The Queue Head Claims the Global Lock
-In this case, the contender has finally becomes the head of the MCS waitqueue.
+In this case, the contender has finally become the head of the MCS waitqueue.
 Therefore, it is eligible to contend for the global lock.
 
 This case can be divided into four steps:
