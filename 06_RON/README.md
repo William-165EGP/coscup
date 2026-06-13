@@ -1,6 +1,6 @@
 ## RON
 ### Introduction
-Routing on Network-on-Chip, also known as RON, is a spinlokc design aims to address the communication overhead caused by coherence on modern multicore systems.
+Routing on Network-on-Chip, also known as RON, is a spinlock design aims to address the communication overhead caused by coherence on modern multicore systems.
 
 As discussed in the previous chapters, when a lock is handed over from one core to another, the lock variable and the protected shared data may need to be transferred through the cache coherence protocol.
 
@@ -28,10 +28,102 @@ To generate the optimised routing table, we can divide the process into two step
 
    The Traveling Salesman Problem asks the following question: given the distance between each pair of cities, what is the shortest possible route that visits every city exactly once and returns to the starting city?
 
-   In RON, this route is used as the lock handoff order. We can either write our own program or use an existing solver such as Google Or-Tools to compute the TSP order.
+   In RON, this route is used as the lock handover order. We can either write our own program or use an existing solver such as Google Or-Tools to compute the TSP order.
 
 With these two steps, RON obtaines a precomputed TSP order.
 
 During lock release, the lock holder scans the waiting cores according to this circular order and hands the lock to the next waiting core.
 
 By following this order, RON reduces unnecessary long-distance cacheline transfers and improves lock performance under high contention.
+
+### The Design of RON
+#### Basic Structure
+The RON implementation uses the following data structures and variables:
+
+1. `plock`
+
+   `plock` is the type of each slot in `arrayLock`.
+   Each slot contains two atomic fields: `numWait` and `lock` 
+
+   1. `numWait`:
+   
+      `numWait` records the number of threads associated with this CPU slot that are currently waiting for the lock.
+
+      * `0`: No thread is waiting on this CPU slot.
+      * Greater than `0`: One or more threads are waiting on or using this CPU slot.
+
+      A counter is required because multiple threads may be assigned to the same CPU under oversubscription.
+      
+   2. `lock`:
+
+      `lock` represents the handover state of this CPU slot.
+       
+      * `1` (MUST_WAIT): Threads associated with this slot must continue waiting.
+      * `0` (HAS_LOCK): The lock has been handed over to this slot.
+
+      When `lock` becomes `0`, the waiting threads complete to atomically change it from `0` back to `1`.
+      Only one thread can succeed and enter the critical section.
+
+2. `arrayLock`:
+
+   `arrayLock` is a per-lock array of `plock` slots.
+   Its size is equal to `CPU_NUMBER`, so each TSP position has one corresponding slot.
+
+   The indices of `arrayLock` follow the precomputed TSP order rather than the CPU numbering.
+   A thread accesses its slot using its TSP position:
+
+   ```c
+   impl->arrayLock[order]
+   ```
+
+   During unlocking, the current lock holder scans `arrayLock` circularly from the next TSP position and searches for the next slot whose `numWait` is greater than `0`.
+   
+
+3. `inUse`:
+
+   `inUse` is a per-lock atomic bool indicating whether the critical section currently has an owner or whether lock ownership is being handed over between threads.
+
+   * `false`: The lock is idle, so a thread may acquire it by atomically changing `inUse` from `false` to `true`.
+   * `true`: The lock is currently held or is being transferred to another waiting slot.
+   
+   If the unlock operation cannot find another waiting slot, it sets `inUse` to `false`.
+   Therefore, `inUse` provides the initial acquisition and fallback path, while `arrayLock` provides the normal RON handover path.
+
+4. `routing`:
+
+   `routing` stores the precomputed TSP route. It maps a TSP position to the CPU ID.
+
+   ```text
+   TSP position -> CPU ID
+   ```
+
+   For example, if:
+
+   ```c
+   routing[0] = 3;
+   ```
+
+   then CPU 3 is the first CPU in the TSP route.
+
+5. `cpu_order`:
+
+   `cpu_order` is the inverse mapping of `routing`. It maps a CPU ID to its position in the TSP route:
+
+   ```text
+   CPU ID -> TSP position
+   ```
+
+   It is initialised as follows:
+
+   ```c
+   for (int position = 0; position < CPU_NUMBER; position++)
+      cpu_order[routing[position]] = position;
+   ```
+
+   After a thread is pinned to a CPU, it obtains its TSP position using:
+
+   ```c
+   order = cpu_order[cpu];
+   ```
+
+   The thread then uses `order` to access its corresponding slot in `arrayLock`.
