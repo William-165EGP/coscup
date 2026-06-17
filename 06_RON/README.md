@@ -596,7 +596,7 @@ The following diagram shows the state transitions:
 
 <details>
 
-<summary> `t3` leaves the critical section steps </summary>
+<summary> `t2` leaves the critical section steps </summary>
 
 ```text
    +--------------+---+---+---+---+
@@ -739,3 +739,576 @@ The following diagram shows the state transitions:
 
 This is another oversubscription case.
 
+##### 7. `t3` leaves the critical section
+When `t3` leaves the critical section, it first decrements `numWait` counter of its slot:
+
+```text
+arrayLock[2].numWait: 1 -> 0
+```
+
+`t3` then starts scanning from the next TSP position.
+Since `t3` runs on CPU 3 at TSP position 2, the scan order is:
+
+```text
+CPU 1 -> CPU 0 -> CPU 2
+```
+
+CPU 1 is the first CPU in this order with waiting threads:
+
+```text
+arrayLock[3].numWait = 2
+```
+
+Therefore, `t3` hands the lock to the CPU 1 slot:
+
+```text
+arrayLock[3].lock: 1 -> 0
+```
+
+Both threads are eligible to consume the token, but only the thread scheduled first can attempt the CAS first. 
+
+```text
+CAS(arrayLock[3].lock, 0, 1)
+```
+
+Here, we assume that `t1` wins the CAS.
+So, `t1` consumes the handover token and enters the critical section, while `t5` fails and continues waiting.
+
+The following diagram shows the state transitions:
+
+<details>
+
+<summary> `t3` leaves the critical section steps </summary>
+
+```text
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 1 | 1 | 1 | 2 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t3` decrements the `numWait` counter
+                  | of its own slot
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 1 | 1 | 0 | 2 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t3` grants a handover token
+                  | to the CPU 1 slot
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 1 | 1 | 0 | 2 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 0 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t1` consumes the handover token
+                  | with CAS(lock, 0, 1)
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 1 | 1 | 0 | 2 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+```
+
+</details>
+
+In this case, `t1` and `t5` are waiting on CPU 1.
+Since only one thread can execute on the same logical at a time, the scheduler determines which thread attempts the CAS first.
+We take this as one of advantages, and will talk about this in the next section.
+
+##### 8. `t1` leaves the critical section
+When `t1` leaves the critical section, it first decrements `numWait` counter of its slot:
+
+```text
+arrayLock[3].numWait: 2 -> 1
+```
+
+`t1` then starts scanning from the next TSP position.
+Since `t1` runs on CPU 1 at TSP position 3, the scan order is:
+
+```text
+CPU 0 -> CPU 2 -> CPU 3
+```
+
+CPU 1 is the first CPU in this order with waiting threads:
+
+```text
+arrayLock[0].numWait = 1
+```
+
+Therefore, `t1` hands the lock to the CPU 0 slot:
+
+```text
+arrayLock[0].lock: 1 -> 0
+```
+
+Thread `t4`, which is waiting on this slot, observes the handover token and attempts:
+
+```text
+CAS(arrayLock[0].lock, 0, 1)
+```
+
+The operation succeeds, so `t4` consumes the handover token and enters the critical section.
+
+The following diagram shows the state transitions:
+
+<details>
+
+<summary> `t1` leaves the critical section steps </summary>
+
+```text
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 1 | 1 | 0 | 2 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t1` decrements the `numWait` counter
+                  | of its own slot
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 1 | 1 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t1` grants a handover token
+                  | to the CPU 0 slot
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 1 | 1 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 0 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t4` consumes the handover token
+                  | with CAS(lock, 0, 1)
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 1 | 1 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+```
+
+</details>
+
+In this case, RON warp around the circular route to find the next successor.
+##### 9. `t4` leaves the critical section
+When `t4` leaves the critical section, it first decrements `numWait` counter of its slot:
+
+```text
+arrayLock[0].numWait: 1 -> 0
+```
+
+`t4` then starts scanning from the next TSP position.
+Since `t4` runs on CPU 0 at TSP position 0, the scan order is:
+
+```text
+CPU 2 -> CPU 3 -> CPU 1
+```
+
+CPU 2 is the first CPU in this order with waiting threads:
+
+```text
+arrayLock[1].numWait = 1
+```
+
+Therefore, `t4` hands the lock to the CPU 2 slot:
+
+```text
+arrayLock[1].lock: 1 -> 0
+```
+
+Thread `t6`, which is waiting on this slot, observes the handover token and attempts:
+
+```text
+CAS(arrayLock[0].lock, 0, 1)
+```
+
+The operation succeeds, so `t6` consumes the handover token and enters the critical section.
+
+The following diagram shows the state transitions:
+
+<details>
+
+<summary> `t4` leaves the critical section steps </summary>
+
+```text
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 1 | 1 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t4` decrements the `numWait` counter
+                  | of its own slot
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 1 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t4` grants a handover token
+                  | to the CPU 2 slot
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 1 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 0 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t6` consumes the handover token
+                  | with CAS(lock, 0, 1)
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 1 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+```
+
+</details>
+
+##### 10. `t6` leaves the critical section
+When `t6` leaves the critical section, it first decrements `numWait` counter of its slot:
+
+```text
+arrayLock[1].numWait: 1 -> 0
+```
+
+`t6` then starts scanning from the next TSP position.
+Since `t6` runs on CPU 2 at TSP position 1, the scan order is:
+
+```text
+CPU 3 -> CPU 1 -> CPU 0
+```
+
+CPU 1 is the first CPU in this order with waiting threads:
+
+```text
+arrayLock[3].numWait = 1
+```
+
+Therefore, `t4` hands the lock to the CPU 1 slot:
+
+```text
+arrayLock[3].lock: 1 -> 0
+```
+
+Thread `t5`, which is waiting on this slot, observes the handover token and attempts:
+
+```text
+CAS(arrayLock[0].lock, 0, 1)
+```
+
+The operation succeeds, so `t5` consumes the handover token and enters the critical section.
+
+The following diagram shows the state transitions:
+
+<details>
+
+<summary> `t6` leaves the critical section steps </summary>
+
+```text
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 1 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t4` decrements the `numWait` counter
+                  | of its own slot
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 0 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t4` grants a handover token
+                  | to the CPU 1 slot
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 0 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 0 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t6` consumes the handover token
+                  | with CAS(lock, 0, 1)
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 0 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+```
+
+</details>
+
+##### 11. `t5` leaves the critical section
+When `t6` leaves the critical section, it first decrements `numWait` counter of its slot:
+
+```text
+arrayLock[3].numWait: 1 -> 0
+```
+
+`t5` then starts scanning from the next TSP position.
+
+```text
+CPU 0 -> CPU 2 -> CPU 3
+```
+
+`t5` finds no remaining slots.
+
+Therefore, it clears:
+
+```text
+inUse: 1 -> 0
+```
+
+The following diagram shows the state transitions:
+
+<details>
+
+<summary> `t5` leaves the critical section steps </summary>
+
+```text
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 0 | 0 | 1 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t5` decrements the `numWait` counter
+                  | of its own slot
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 0 | 0 | 0 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t5` finds no remaining waiter
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 0 | 0 | 0 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 1
+
+                  |
+                  |
+                  | `t5` clears `inUse`
+                  |
+                  |
+                  v
+
+   +--------------+---+---+---+---+
+   | TSP position | 0 | 1 | 2 | 3 |
+   +--------------+---+---+---+---+
+   | CPU ID       | 0 | 2 | 3 | 1 |
+   +--------------+---+---+---+---+
+   | numWait      | 0 | 0 | 0 | 0 |
+   +--------------+---+---+---+---+
+   | lock         | 1 | 1 | 1 | 1 |
+   +--------------+---+---+---+---+
+
+   inUse = 0
+```
+
+</details>
+
+In this case, `t5` finds no successor, so it clears the `inUse`.
+Therefore, the lock returns to idle state. 
