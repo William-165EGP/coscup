@@ -1384,9 +1384,9 @@ In the current implementation, the unlock operation performs a linear scan along
 
 Therefore, the worst-case of searching the successor complexity is:
 
-\[
+```math
 O(\text{CPU\_NUMBER}) 
-\]
+```
 
 Under high contention, many CPU slots are likely to contain waiting threads.
 As a result, RON can often find the next successor after checking only a small number of nearby slots.
