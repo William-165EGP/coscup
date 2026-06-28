@@ -1312,3 +1312,90 @@ The following diagram shows the state transitions:
 
 In this case, `t5` finds no successor, so it clears the `inUse`.
 Therefore, the lock returns to idle state. 
+## Advantages
+### 1. Balacing Fairness and Throughput
+Many lock designs face a trade-off between fairness and throughput.
+A lock that strictly follows FIFO ordering can provide strong fairness, but it may transfer ownership between distant cores and incur high cache-coherence and handover costs.
+In contrast, a lock that always favours nearby cores may improve throughput but allow some threads to wait significantly longer than others.
+
+RON attempts to balance these two objectives.
+Instead of selecting the next owner according to thread arrival order, it searches for the next waiting CPU along a precomputed circular TSP order.
+This routing order reduces the overall lock-handoff cost while ensuring that the search eventually visits every CPU slot.
+
+As a result, RON provides bounded waiting: a waiting CPU slot cannot bypass indefinitely because lock ownership moves in one direction around the circular route.
+At the same time, the optimised routing order helps maintain high throughput by reducing expensive transfers between distant cores.
+
+However, the fairness provided by RON is not FIFO fairness.
+In RON, a thread that arrives later may acquire the lock before an earlier thread if its CPU appears earlier in the current routing scan.
+MCS and ticket locks grant the lock according to the threads' arrival order. 
+Therefore, RON should be regarded as providing bounded and topology-aware fairness rather than strict arrival-order fairness.
+
+This distinction is especially important in real-time systems, where the order in which requests are served may effect response-time predictability.
+Although RON provides bounded waiting and prevents indefinite starvation, it does not preserve arrival-order fairness in the same way as MCS or ticket locks.
+### 2. Support for Oversubscription
+Queue-based locks may suffer from serious performance degradation under oversubscription.
+In a traditional queue-based lock, lock ownership is handed directly to a specific successor.
+If that successor is descheduled before it can enter or leave the critical section, the entire queue may be blocked until the thread is scheduled again.
+
+This problem becomes more severe as the thread-to-CPU ratio increases.
+A longer waiting queue increases the probability that either the current lock holder or the designated successor is descheduled, which may delay subsequent lock handovers and create a cascading effect throughout the queue.
+
+RON-plock addresses this problem by associating each waiting slot with a CPU rather than with a specific thread.
+Each CPU slot contains a `lock` field that acts as a handover token.
+When the lock is handed to a CPU slot, any waiting thread that is curently scheduled on that CPU can attempt to consume the token by atomically changing the slot's `lock` field.
+
+Since at least one thread can run on an available CPU, the lock handover does not depend on a particular designated thread being scheduled.
+If multiple threads share the same CPU slot, the thread that is scheduled first can attempt to acquire the lock, while remaining threads continue to waiting.
+
+This CPU-based handover mechanism makes RON-plock more tolerant of thread oversubscription and reduces the risk that a descheduled successor stalls the entire waiting queue.
+As a result, RON-plock can maintain better scalability in user-space workloads where the number of thread exceeds the number of available CPUs.
+## Disadvantages
+### 1. Requires a Precomputed and Accurate TSP Order
+RON relies on a precomputed TSP order that reflects the actual communication costs between CPU cores.
+To construct this order, the system must first measure core-to-core latency and then solve a routing problem based on the resulting latency matrix.
+
+If the routing order is inaccurate, outdated, or does not match the CPUs used by the application, RON may frequently hand the lock to a distant core.
+In this case, the routing order provides little locality bebefit, and the lock may still experience expensive remote handovers and cache-line transfer.
+
+However, RON would not become identical to MCS or ticket locks.
+MCS or ticket locks follow the arriving order of threads, whereas RON would still follow its precomputed circular CPU order.
+The problem is that an inaccurate route may no longer reduce handover costs effectively.
+
+RON also introduces additional successor-selection overhead.
+In MCS, the current owner directly hands the lock to its recorede successor.
+Similarly, a ticket lock only needs to advance the current grant value.
+In contrast, RON must scan the `arrayLock` slots along the routing order until it finds a CPU with one or more waiting threads.
+
+Therefore, if the precomputed route poorly represents the actual hardware topology, the cost of scanning for a successor may exceed the locality benefit provided by RON.
+Under these conditions, a simpler lock such as MCS or a ticket lock may perform better.
+### 2. Requires Additional Time to Find the Next Successor
+When the lock holder leaves the critical section, RON must search for the next CPU slot that contains at least one waiting thread.
+
+In the current implementation, the unlock operation performs a linear scan along circular TSP route:
+
+```c
+  for (int i = 1; i < CPU_NUMBER; i++) {
+    if (arrayLock[i].numWait > 0) {
+      // do something here
+      return;
+    }
+  }
+```
+
+Therefore, the worst-case of searching the successor complexity is:
+
+\[
+O(\text{CPU\_NUMBER}) 
+\]
+
+Under high contention, many CPU slots are likely to contain waiting threads.
+As a result, RON can often find the next successor after checking only a small number of nearby slots.
+
+However, under low contention, the waiting slots may be sparse.
+The lock holder may need to scan many empty slots before finding the next waiter.
+If no waiter exists, it must scan almost entire `arrayLock` before clearing `inUse`.
+
+This additional scanning overhead can reduce the bebefit of RON, especially when the number of CPUs is large.
+In contrast, MCS directly records the next successor, while a ticket lock only advances its grant value.
+
+Therefore, RON is generally more suitable for high contention workloads, where the reduced handover cost can compensate for the additional successor search overhead.
